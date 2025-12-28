@@ -1,0 +1,74 @@
+import { OAuth2Client } from 'google-auth-library';
+import fs from 'fs/promises';
+import { getKeysFilePath, generateCredentialsErrorMessage, OAuthCredentials } from './utils.js';
+
+async function loadCredentialsFromFile(): Promise<OAuthCredentials> {
+  const keysContent = await fs.readFile(getKeysFilePath(), 'utf-8');
+  const keys = JSON.parse(keysContent);
+
+  if (keys.installed) {
+    // Standard OAuth credentials file format (Desktop app)
+    const { client_id, client_secret, redirect_uris } = keys.installed;
+    return { client_id, client_secret, redirect_uris };
+  } else if (keys.web) {
+    // Web app credentials format
+    const { client_id, client_secret, redirect_uris } = keys.web;
+    return { 
+      client_id, 
+      client_secret, 
+      redirect_uris: redirect_uris || ['http://localhost:3000/oauth2callback'] 
+    };
+  } else if (keys.client_id && keys.client_secret) {
+    // Direct format
+    return {
+      client_id: keys.client_id,
+      client_secret: keys.client_secret,
+      redirect_uris: keys.redirect_uris || ['http://localhost:3000/oauth2callback']
+    };
+  } else {
+    throw new Error('Invalid credentials file format. Expected either "installed", "web", or direct client_id/client_secret fields.');
+  }
+}
+
+async function loadCredentialsWithFallback(): Promise<OAuthCredentials> {
+  // Load credentials from file (env var, config dir, or project root)
+  try {
+    return await loadCredentialsFromFile();
+  } catch (fileError) {
+    // Generate helpful error message
+    const errorMessage = generateCredentialsErrorMessage();
+    throw new Error(`${errorMessage}\n\nOriginal error: ${fileError instanceof Error ? fileError.message : fileError}`);
+  }
+}
+
+export async function initializeOAuth2Client(): Promise<OAuth2Client> {
+  try {
+    const credentials = await loadCredentialsWithFallback();
+    
+    // Use the first redirect URI as the default for the base client
+    return new OAuth2Client({
+      clientId: credentials.client_id,
+      clientSecret: credentials.client_secret,
+      redirectUri: credentials.redirect_uris[0],
+    });
+  } catch (error) {
+    throw new Error(`Error loading OAuth keys: ${error instanceof Error ? error.message : error}`);
+  }
+}
+
+export async function loadCredentials(): Promise<{ client_id: string; client_secret: string; redirect_uris: string[] }> {
+  try {
+    const credentials = await loadCredentialsWithFallback();
+    
+    if (!credentials.client_id || !credentials.client_secret) {
+      throw new Error('Client ID or Client Secret missing in credentials.');
+    }
+    return {
+      client_id: credentials.client_id,
+      client_secret: credentials.client_secret,
+      redirect_uris: credentials.redirect_uris
+    };
+  } catch (error) {
+    throw new Error(`Error loading credentials: ${error instanceof Error ? error.message : error}`);
+  }
+}
